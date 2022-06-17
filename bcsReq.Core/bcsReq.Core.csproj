@@ -34,33 +34,36 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Aras.Server.Core">
-      <HintPath>C:\Program Files (x86)\ArasRE12SP9\Innovator\Innovator\Server\bin\Aras.Server.Core.dll</HintPath>
+      <HintPath>..\..\..\Program Files (x86)\InnREV2\Innovator\Server\bin\Aras.Server.Core.dll</HintPath>
     </Reference>
     <Reference Include="bwInnovatorCore">
-      <HintPath>C:\Program Files (x86)\Aras112\Innovator\Innovator\Server\bin\bwInnovatorCore.dll</HintPath>
+      <HintPath>..\..\..\Program Files (x86)\MPP12SP\Innovator\Server\bin\bwInnovatorCore.dll</HintPath>
+    </Reference>
+    <Reference Include="HtmlAgilityPack">
+      <HintPath>..\..\RE\bcsReq.Core\bin\Debug\HtmlAgilityPack.dll</HintPath>
     </Reference>
     <Reference Include="IOM, Version=11.0.0.6920, Culture=neutral, PublicKeyToken=524d880b05474146, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\ArasRE12SP9\Innovator\Innovator\Server\bin\IOM.dll</HintPath>
+      <HintPath>..\..\..\Program Files (x86)\MPP12SP\Innovator\Client\bin\IOM.dll</HintPath>
     </Reference>
     <Reference Include="Newtonsoft.Json">
       <HintPath>C:\Program Files (x86)\Aras112\Innovator\Innovator\Server\bin\Newtonsoft.Json.dll</HintPath>
     </Reference>
     <Reference Include="NPOI, Version=2.4.1.0, Culture=neutral, PublicKeyToken=0df73ec7942b34e1, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\RE Aras\Innovator\Innovator\Server\bin\NPOI.dll</HintPath>
+      <HintPath>..\..\..\Program Files (x86)\InnREV2\Innovator\Server\bin\NPOI.dll</HintPath>
     </Reference>
     <Reference Include="NPOI.OOXML, Version=2.4.1.0, Culture=neutral, PublicKeyToken=0df73ec7942b34e1, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\RE Aras\Innovator\Innovator\Server\bin\NPOI.OOXML.dll</HintPath>
+      <HintPath>..\..\..\Program Files (x86)\InnREV2\Innovator\Server\bin\NPOI.OOXML.dll</HintPath>
     </Reference>
     <Reference Include="NPOI.OpenXml4Net, Version=2.4.1.0, Culture=neutral, PublicKeyToken=0df73ec7942b34e1, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\RE Aras\Innovator\Innovator\Server\bin\NPOI.OpenXml4Net.dll</HintPath>
+      <HintPath>..\..\RE\bcsReq.Core\bin\Debug\NPOI.OpenXml4Net.dll</HintPath>
     </Reference>
     <Reference Include="NPOI.OpenXmlFormats, Version=2.4.1.0, Culture=neutral, PublicKeyToken=0df73ec7942b34e1, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>C:\Program Files (x86)\RE Aras\Innovator\Innovator\Server\bin\NPOI.OpenXmlFormats.dll</HintPath>
+      <HintPath>..\..\..\Program Files (x86)\InnREV2\Innovator\Server\bin\NPOI.OpenXmlFormats.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />

@@ -1,11 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Xml;
 using Aras.IOM;
 using Aras.Server.Core;
 using bwInnovatorCore;
+using HtmlAgilityPack;
+using NPOI.SS.UserModel;
+using NPOI.XSSF.UserModel;
 
 namespace bcsReq.Core
 {
@@ -655,7 +661,7 @@ namespace bcsReq.Core
             {
                 return result;
             }
-            
+
 
             return Factory.UpdateComment(conn.GetTableName(ItemTypeName), Comment);
         }
@@ -763,6 +769,750 @@ namespace bcsReq.Core
         {
             return System.Security.SecurityElement.Escape(data);
         }
+
+        /// <summary>
+        /// 需求追踪报表
+        /// </summary>
+        /// <param name="req">需求</param>
+        /// <returns></returns>
+        public Item getTrackReportToGrid(Item req)
+        {
+            if (!CheckLicense())
+            {
+                return Cinn.newError(CstrErrMessage);
+            }
+            string reqdoc_id = req.getProperty("itemid");
+            if (string.IsNullOrEmpty(reqdoc_id))
+            {
+                return Cinn.newError("未读取到需求文档ID");
+            }
+            string re_direction = req.getProperty("re_direction");
+            gridStyle = new StringBuilder();
+            GetTrackReportBaseTamplate();
+            GetTrackReportBaseTamplates();
+            if (re_direction == "0")
+            {
+                Item reqdoc_relation2 = Cinn.newItem("re_Requirement", "get");
+                reqdoc_relation2.setID(reqdoc_id);
+                reqdoc_relation2 = reqdoc_relation2.apply();
+                GetReqDataXml(reqdoc_relation2);
+            }
+            else
+            {
+                Item reqdoc_relation = Cinn.newItem("re_Requirement", "get");
+                reqdoc_relation.setID(reqdoc_id);
+                reqdoc_relation = reqdoc_relation.apply();
+                getActReDate(reqdoc_relation);
+            }
+            gridStyle.Append("</table>");
+            return Cinn.newResult(gridStyle.ToString());
+        }
+
+        /// <summary>
+        /// 需求上阶查询
+        /// </summary>
+        /// <param name="req">需求</param>
+        /// <param name="actReqs">项目任务</param>
+        private void GetReqDataXml(Item req)
+        {
+            setReqItemXml(req);
+            req.fetchRelationships("re_Requirement_UseCase", "related_id(id,title,major_rev,owned_by_id,current_state,cn_estimate_duration,description,cn_notes)");
+            req.fetchRelationships("re_Requirement_TestCase", "related_id(id,title,major_rev,owned_by_id,current_state,cn_estimate_duration,description,cn_notes)");
+            req.fetchRelationships("re_Requirement_Out_Link", "related_id(id,req_title,major_rev,managed_by_id,current_state)");
+            Item useCaseItems = req.getRelationships("re_Requirement_UseCase");
+            for (int j = 0; j < useCaseItems.getItemCount(); j++)
+            {
+                setUseCaseItemXml(useCaseItems.getItemByIndex(j));
+            }
+            GetUseCaseStructure(req.getRelationships("re_Requirement_TestCase"), 1);
+            Item re_Out_Link = req.getRelationships("re_Requirement_Out_Link");
+            for (int i = 0; i < re_Out_Link.getItemCount(); i++)
+            {
+                GetReqDataXml(re_Out_Link.getItemByIndex(i).getRelatedItem());
+            }
+            gridStyle.Append("</tr>");
+        }
+
+        private void getActReDate(Item req)
+        {
+            setReqItemXml(req);
+            Item actReqs = Cinn.applySQL("select * from innovator.ACTIVITY2 A left join innovator.ACTIVITY2_REQUIREMENT B on A.id=B.SOURCE_ID where b.RELATED_ID='" + req.getID() + "'");
+            for (int j = 0; j < actReqs.getItemCount(); j++)
+            {
+                setActItemXml(actReqs.getItemByIndex(j));
+            }
+            Item reqdoc_relation = Cinn.newItem("re_Requirement_Out_Link", "get");
+            reqdoc_relation.setProperty("related_id", req.getID());
+            Item reqdoc_relations = Cinn.newItem("re_Requirement", "get");
+            reqdoc_relations.addRelationship(reqdoc_relation);
+            reqdoc_relations = reqdoc_relations.apply();
+            for (int i = 0; i < reqdoc_relations.getItemCount(); i++)
+            {
+                getActReDate(reqdoc_relations.getItemByIndex(i));
+            }
+            gridStyle.Append("</tr>");
+        }
+
+        private string getWbsID(string webID)
+        {
+            Item wbsAct = Cinn.newItem("sub wbs", "get");
+            wbsAct.setProperty("related_id", webID);
+            wbsAct = wbsAct.apply();
+            if (!wbsAct.isEmpty())
+            {
+                return getWbsID(wbsAct.getProperty("source_id"));
+            }
+            return webID;
+        }
+
+
+        public Item RE_Export_Excel(Item req, dynamic CCOS)
+        {
+            if (CheckLicense() == false)
+            {
+                return Cinn.newError(CstrErrMessage);
+            }
+
+            string reqdoc_id = req.getProperty("itemid");
+            if (String.IsNullOrEmpty(reqdoc_id))
+            {
+                return Cinn.newError("未读取到需求文档ID");
+            }
+            string gridXMLS = req.node.LastChild.InnerXml;
+            if (String.IsNullOrEmpty(gridXMLS))
+            {
+                return Cinn.newError("页面无内容导出");
+            }
+
+            DataTable dt = HtmlToDataTable(gridXMLS);
+            string filePath = CCOS.Server.MapPath("../Client/scripts/WebEditor/ueditor/TemporaryFile/") + Cinn.getNewID() + ".xlsx";
+
+            return NPOICreateExcel(dt, filePath);
+        }
+
+        public static DataTable HtmlToDataTable(string html)
+        {
+            const string nulltxt = "everything is ok";
+            DataTable dt = new DataTable();
+            HtmlDocument doc = new HtmlDocument();
+            doc.LoadHtml(html);
+            var tList = doc.DocumentNode.SelectNodes("//table");
+            if (tList != null)
+            {
+                var table = tList[0];
+                var rows = table.SelectNodes("//tr");
+                var Columns = table.SelectNodes("//th");
+                if (rows != null)
+                {
+                    var colCount = 0;
+                    foreach (var td in rows[0].ChildNodes.Where(m => m.OriginalName.ToLower() == "td"))
+                    {
+                        var attr = td.Attributes["colspan"];
+                        var colspan = (attr != null) ? int.Parse(attr.Value) : 1;
+                        colCount = colCount + colspan;
+                    }
+                    var rowCount = rows.Count;
+                    var arr = new string[rowCount][];
+                    for (var r = 0; r < rowCount; r++)
+                    {
+                        arr[r] = new string[colCount];
+                    }
+                    //填充数据
+                    for (var row = 0; row < rowCount; row++)
+                    {
+                        var tr = rows[row];
+                        var cols = tr.ChildNodes.Where(m => m.OriginalName.ToLower() == "td").ToList();
+                        for (var column = 0; column < cols.Count; column++)
+                        {
+                            var cAttr = cols[column].Attributes["colspan"];
+                            var colspan = (cAttr != null) ? int.Parse(cAttr.Value) : 1;
+                            var rAttr = cols[column].Attributes["rowspan"];
+                            var rowspan = (rAttr != null) ? int.Parse(rAttr.Value) : 1;
+                            var text = string.IsNullOrEmpty(cols[column].InnerText) ? nulltxt : cols[column].InnerText;
+                            var startColumn = 0;
+                            for (var i = 0; i < rowspan; i++)
+                            {
+                                for (var j = 0; j < colspan; j++)
+                                {
+                                    var d = startColumn == 0 ? column : startColumn;
+                                    if (string.IsNullOrEmpty(arr[row + i][d + j]))
+                                        arr[row + i][d + j] = text;
+                                    else
+                                    {
+                                        var t = column + j + 1;
+                                        startColumn = t;
+                                        while (true)
+                                        {
+                                            if (string.IsNullOrEmpty(arr[row][t]))
+                                            {
+                                                arr[row][t] = text;
+                                                break;
+                                            }
+                                            t++;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    foreach (var th in Columns)
+                    {
+                        dt.Columns.Add(th.InnerText);
+                    }
+                    for (var i = 0; i < arr.Length; i++)
+                    {
+                        //if (i == 0)
+                        //{
+                        //    for (var j = 0; j < arr[i].Length; j++)
+                        //    {
+                        //        var columnTxt = arr[i][j] == nulltxt ? "Column" + j : arr[i][j];
+                        //        dt.Columns.Add(columnTxt);
+                        //    }
+                        //}
+
+                        var row = dt.NewRow();
+                        for (var k = 0; k < arr[i].Length; k++)
+                        {
+                            var columnTxt = arr[i][k] == nulltxt ? "" : arr[i][k];
+                            row[k] = columnTxt;
+                        }
+                        dt.Rows.Add(row);
+                    }
+                }
+            }
+            return dt;
+        }
+
+        /// <summary>
+        /// 使用npoi创建一个excel文件
+        /// </summary>
+        public Item NPOICreateExcel(DataTable dt, string filePath)
+        {
+            //声明一个工作簿
+            XSSFWorkbook workBook = new XSSFWorkbook();
+            //创建一个sheet页
+            ISheet sheet = workBook.CreateSheet("MySheet");
+            //向第一行第一列的单元格添加文本
+
+            //样式
+            ICellStyle style1 = workBook.CreateCellStyle();
+            style1.FillForegroundColor = 23;
+            style1.FillPattern = FillPattern.SolidForeground;
+
+            //导入excel标题
+            IRow rowHeader = sheet.CreateRow(0);
+            if (rowHeader == null)//workbook 创建的sheet里是获取不到对应的excel行和列的单元格对象
+            {
+                rowHeader = sheet.CreateRow(0);
+            }
+            for (int i = 0; i < dt.Columns.Count; i++)
+            {
+                ICell cell = rowHeader.CreateCell(i);
+                cell.SetCellValue(dt.Columns[i].ColumnName);
+            }
+
+            //导入excel内容
+            for (int i = 0; i < dt.Rows.Count; i++)
+            {
+                IRow row = sheet.GetRow(i + 1);//获取第二行
+                if (row == null)//workbook 创建的sheet里是获取不到对应的excel行和列的单元格对象
+                {
+                    row = sheet.CreateRow(i + 1);
+                }
+                for (int j = 0; j < dt.Columns.Count; j++)
+                {
+                    ICell cell = row.GetCell(j);//获取第一列
+                    if (cell == null)
+                    {
+                        cell = row.CreateCell(j);
+                    }
+                    cell.SetCellValue(dt.Rows[i][j].ToString());
+                }
+            }
+
+            //输出excel文件
+            using (FileStream fs = File.OpenWrite(filePath))
+            {
+                workBook.Write(fs);//向打开的这个xls文件中写入并保存。
+                //上传到aras
+                Item file = Cinn.newItem("File", "add");
+                file.setProperty("filename", "需求追踪报表导出.xlsx");
+                file.attachPhysicalFile(filePath);
+                file = file.apply();
+
+                //删除文件
+                File.Delete(filePath);
+
+                //返回File
+                return file;
+            }
+        }
+
+        public Item generateXML4Item(Item req)
+        {
+            if (!CheckLicense())
+            {
+                return Cinn.newError(CstrErrMessage);
+            }
+            string re_direction = req.getProperty("re_direction");
+            string reqdoc_id = req.getProperty("itemid");
+            string tablexml = req.node.SelectSingleNode("tablexml").InnerXml;
+            gridStyle = new StringBuilder();
+            gridStyle.Append(tablexml.Substring(0, tablexml.Length - 8));
+            //inputRowData(req);
+            if (re_direction == "0")
+            {
+                Item reqdoc_relation3 = Cinn.newItem("re_Requirement", "get");
+                reqdoc_relation3.setID(reqdoc_id);
+                reqdoc_relation3 = reqdoc_relation3.apply();
+                reqdoc_relation3.fetchRelationships("re_Requirement_UseCase", "related_id(id,title,major_rev,owned_by_id,current_state,cn_estimate_duration,description,cn_notes)");
+                reqdoc_relation3.fetchRelationships("re_Requirement_TestCase", "related_id(id,title,major_rev,owned_by_id,current_state,cn_estimate_duration,description,cn_notes)");
+            }
+            else
+            {
+                bool isReqXml = false;
+                Item actReqs = Cinn.newItem("Activity2", "get");
+                Item actReqRd = Cinn.newItem("Activity2 Requirement", "get");
+                actReqRd.setProperty("related_id", reqdoc_id);
+                actReqs.addRelationship(actReqRd);
+                actReqs = getSearch(req, actReqs, req.getProperty("re_direction"));
+                if (actReqs.getItemCount() > 0)
+                {
+                    for (int i = 0; i < actReqs.getItemCount(); i++)
+                    {
+                        setActItemXmlSearch(req, actReqs.getItemByIndex(i), req.getProperty("re_direction"));
+                    }
+                    if (remarkBool)
+                    {
+                        Item reqdoc_relation2 = Cinn.newItem("re_Requirement", "get");
+                        reqdoc_relation2.setID(reqdoc_id);
+                        reqdoc_relation2 = getSearch(req, reqdoc_relation2, "66");
+                        if (reqdoc_relation2.getItemCount() > 0)
+                        {
+                            setActItemXmlSearch(req, reqdoc_relation2, "66");
+                            isReqXml = true;
+                        }
+                    }
+                    else
+                    {
+                        isReqXml = true;
+                    }
+                }
+                else
+                {
+                    Item reqdoc_relation = Cinn.newItem("re_Requirement", "get");
+                    reqdoc_relation.setID(reqdoc_id);
+                    reqdoc_relation = getSearch(req, reqdoc_relation, "66");
+                    if (reqdoc_relation.getItemCount() > 0)
+                    {
+                        setReqItemXml(reqdoc_relation);
+                        isReqXml = true;
+                    }
+                }
+                if (isReqXml)
+                {
+                    gridStyle.Append("</tr>");
+                }
+            }
+            return Cinn.newResult(gridStyle.ToString());
+        }
+
+        private Item getSearch(Item inputRows, Item reqRd, string re_direction)
+        {
+            string theadname, theadmajor, theaddays, theaddescription, theadremark;
+            theadname = inputRows.getProperty("theadname");
+            theadmajor = inputRows.getProperty("theadmajor");
+            theaddays = inputRows.getProperty("theaddays");
+            theaddescription = inputRows.getProperty("theaddescription");
+            theadremark = inputRows.getProperty("theadremark");
+            if (!String.IsNullOrEmpty(theadname) || !String.IsNullOrEmpty(theadmajor) || !String.IsNullOrEmpty(theaddays) || !String.IsNullOrEmpty(theaddescription) || !String.IsNullOrEmpty(theadremark))
+            {
+                if (!String.IsNullOrEmpty(theadname))
+                {
+                    switch (re_direction)
+                    {
+                        case "0":
+                            break;
+                        case "1":
+                            reqRd.setProperty("name", theadname);
+                            if (wildCard(theadname))
+                            {
+                                reqRd.setPropertyAttribute("name", "condition", "like");
+                            }
+                            break;
+                        case "66":
+                            reqRd.setProperty("req_title", theadname);
+                            if (wildCard(theadname))
+                            {
+                                reqRd.setPropertyAttribute("req_title", "condition", "like");
+                            }
+                            break;
+                    }
+                }
+                if (!String.IsNullOrEmpty(theadmajor))
+                {
+                    switch (re_direction)
+                    {
+                        case "0":
+                            break;
+                        case "1":
+                            return Cinn.newError("项目任务无版本");
+                        case "66":
+                            reqRd.setProperty("major_rev", theadmajor);
+                            if (wildCard(theadmajor))
+                            {
+                                reqRd.setPropertyAttribute("major_rev", "condition", "like");
+                            }
+                            break;
+                    }
+                }
+                if (!String.IsNullOrEmpty(theaddays))
+                {
+                    switch (re_direction)
+                    {
+                        case "0":
+                            break;
+                        case "1":
+                            reqRd.setProperty("expected_duration", theaddays);
+                            if (wildCard(theaddays))
+                            {
+                                reqRd.setPropertyAttribute("expected_duration", "condition", "like");
+                            }
+                            break;
+                        case "66":
+                            return Cinn.newError("需求无预计工时");
+                    }
+                }
+                if (!String.IsNullOrEmpty(theaddescription))
+                {
+                    switch (re_direction)
+                    {
+                        case "0":
+                            break;
+                        case "1":
+                            return Cinn.newError("项目任务无案例说明");
+                        case "66":
+                            return Cinn.newError("需求无案例说明");
+                    }
+                }
+                if (!String.IsNullOrEmpty(theadremark))
+                {
+                    switch (re_direction)
+                    {
+                        case "0":
+                            break;
+                        case "1":
+                            break;
+                        case "66":
+                            return Cinn.newError("需求无备注说明");
+                    }
+                }
+            }
+            return reqRd.apply();
+        }
+
+        private bool wildCard(string thead)
+        {
+            if (thead.Contains("%") || thead.Contains("*"))
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        private string wildcard(string thead)
+        {
+            if (thead.Contains("%"))
+            {
+                thead = thead.Replace("%", "_");
+                if (thead.Contains("*"))
+                {
+                    thead = thead.Replace("*", "%");
+                    return thead;
+                }
+                return thead;
+            }
+            if (thead.Contains("*"))
+            {
+                thead = thead.Replace("*", "%");
+            }
+            return thead;
+        }
+
+        private bool wildItemKeyedName(string theadA, string type, string id)
+        {
+            Item wildItem;
+            if (id == "")
+            {
+                return true;
+            }
+            switch (type)
+            {
+                case "identity":
+                    wildItem = Cinn.applySQL("select id from innovator.[IDENTITY] where id='" + id + "' and KEYED_NAME like N'" + wildcard(theadA) + "'");
+                    if (wildItem.getItemCount() < 0)
+                    {
+                        return true;
+                    }
+                    return false;
+                case "lcs":
+                    string liclang = Cinn.getI18NSessionContext().GetLanguageSuffix();
+                    wildItem = Cinn.applySQL("select id from innovator.[LIFE_CYCLE_STATE] where id='" + id + "' and [LABEL" + liclang + "] like N'" + wildcard(theadA) + "'");
+                    if (wildItem.getItemCount() < 0)
+                    {
+                        return true;
+                    }
+                    return false;
+                case "prj":
+                    wildItem = Cinn.applySQL("select name from innovator.PROJECT where wbs_id='" + id + "' and NAME like N'" + wildcard(theadA) + "'");
+                    if (wildItem.getItemCount() < 0)
+                    {
+                        return true;
+                    }
+                    return false;
+            }
+            return true;
+        }
+
+        private void setReqItemXml(Item req)
+        {
+            string state = req.getProperty("current_state", "");
+            string stateName = "";
+            string owner = req.getProperty("managed_by_id", "");
+            if (owner != "")
+            {
+                owner = Cinn.getItemById("Identity", owner).getProperty("keyed_name");
+            }
+            if (state != "")
+            {
+                Item stateItem = Cinn.getItemById("Life Cycle State", state);
+                stateName = stateItem.getProperty("name");
+                state = stateItem.getProperty("label", stateName);
+            }
+            gridStyle.Append("<tr level=\"");
+            gridStyle.Append("0");
+            gridStyle.Append("\" icon0=\"../Solutions/RE/Images/Requirement.svg\" icon1=\"../Solutions/RE/Images/Requirement.svg\" id=\"" + req.getNewID().ToString() + "\"><userdata key=\"gridData_rowItemID\" value=\"");
+            gridStyle.Append(req.getID());
+            gridStyle.Append("\" />");
+            gridStyle.Append("<td>" + Escape(req.getProperty("req_title", "")) + "</td>");
+            gridStyle.Append("<td>" + Escape(req.getProperty("major_rev", "")) + "</td>");
+            gridStyle.Append("<td>" + Escape(owner) + "</td>");
+            gridStyle.Append("<td></td><td></td><td></td>");
+            gridStyle.Append("<td bgColor='" + getStateColor(stateName) + "'>" + Escape(state) + "</td>");
+        }
+
+        private void setActItemXml(Item actReq)
+        {
+            string state = actReq.getProperty("current_state", "");
+            string stateName = "";
+            string actProjectName = "";
+            string owner = actReq.getProperty("managed_by_id", "");
+            if (owner != "")
+            {
+                owner = Cinn.getItemById("Identity", owner).getProperty("keyed_name");
+            }
+            if (state != "")
+            {
+                Item stateItem = Cinn.getItemById("Life Cycle State", state);
+                stateName = stateItem.getProperty("name");
+                state = stateItem.getProperty("label", stateName);
+            }
+            Item wbsAct = Cinn.newItem("WBS Activity2", "get");
+            wbsAct.setProperty("related_id", actReq.getID());
+            wbsAct = wbsAct.apply();
+            Item actProject = Cinn.newItem("Project", "get");
+            if (!wbsAct.isEmpty())
+            {
+                string wbsActID = wbsAct.getProperty("source_id");
+                string wbs_id = getWbsID(wbsActID);
+                actProject.setProperty("wbs_id", wbs_id);
+                actProject = actProject.apply();
+                actProjectName = actProject.getProperty("name", "");
+            }
+            gridStyle.Append("<tr level=\"");
+            gridStyle.Append("1");
+            gridStyle.Append("\" icon0=\"../Images/Activity2.svg\" icon1=\"../Images/Activity2.svg\" id=\"" + actReq.getNewID().ToString() + "\"><userdata key=\"gridData_rowItemID\" value=\"");
+            gridStyle.Append(actReq.getID());
+            gridStyle.Append("\" />");
+            gridStyle.Append("<td>" + Escape(actReq.getProperty("name", "")) + "</td>");
+            gridStyle.Append("<td></td>");
+            gridStyle.Append("<td>" + Escape(owner) + "</td>");
+            gridStyle.Append("<td>" + actReq.getProperty("expected_duration", "") + "</td>");
+            gridStyle.Append("<td></td>");
+            gridStyle.Append("<td>" + Escape(actProjectName) + "</td>");
+            gridStyle.Append("<td bgColor='" + getStateColor(stateName) + "'>" + Escape(state) + "</td>");
+            gridStyle.Append("</tr>");
+        }
+
+        private void setUseCaseItemXml(Item req)
+        {
+            Item useCaseItem = req.getRelatedItem();
+            string state = useCaseItem.getProperty("current_state", "");
+            string stateName = "";
+            string owner = useCaseItem.getProperty("owned_by_id", "");
+            if (owner != "")
+            {
+                owner = Cinn.getItemById("Identity", owner).getProperty("keyed_name");
+            }
+            if (state != "")
+            {
+                Item stateItem = Cinn.getItemById("Life Cycle State", state);
+                stateName = stateItem.getProperty("name");
+                state = stateItem.getProperty("label", stateName);
+            }
+            gridStyle.Append("<tr level=\"");
+            gridStyle.Append("1");
+            gridStyle.Append("\" icon0=\"../Images/List_2.svg\" icon1=\"../Images/List_2.svg\" id=\"" + useCaseItem.getNewID().ToString() + "\"><userdata key=\"gridData_rowItemID\" value=\"");
+            gridStyle.Append(useCaseItem.getID());
+            gridStyle.Append("\" />");
+            gridStyle.Append("<td>" + Escape(useCaseItem.getProperty("title", "")) + "</td>");
+            gridStyle.Append("<td>" + Escape(useCaseItem.getProperty("major_rev", "")) + "</td>");
+            gridStyle.Append("<td>" + Escape(owner) + "</td>");
+            gridStyle.Append("<td>" + useCaseItem.getProperty("cn_estimate_duration", "") + "</td>");
+            gridStyle.Append("<td>" + Escape(useCaseItem.getProperty("description", "")) + "</td>");
+            gridStyle.Append("<td>" + Escape(useCaseItem.getProperty("cn_notes", "")) + "</td>");
+            gridStyle.Append("<td bgColor='" + getStateColor(stateName) + "'>" + Escape(state) + "</td>");
+            useCaseItem.fetchRelationships("re_UseCase_TestCase", "related_id(id,title,major_rev,owned_by_id,current_state,cn_estimate_duration,description,cn_notes)");
+            GetUseCaseStructure(useCaseItem.getRelationships("re_UseCase_TestCase"), 2);
+            gridStyle.Append("</tr>");
+        }
+
+        private bool remarkBool = true;
+        private void setActItemXmlSearch(Item inputRows, Item reqRd, string re_direction)
+        {
+            Item reqdoc_relation = Cinn.newItem("re_Requirement", "get");
+            reqdoc_relation.setID(inputRows.getProperty("itemid"));
+            string theadleader, theadstate, theadremark;
+            theadleader = inputRows.getProperty("theadleader");
+            theadstate = inputRows.getProperty("theadstate");
+            theadremark = inputRows.getProperty("theadremark");
+            if (!String.IsNullOrEmpty(theadleader) || !String.IsNullOrEmpty(theadstate) || !String.IsNullOrEmpty(theadremark))
+            {
+
+                if (!String.IsNullOrEmpty(theadleader))
+                {
+                    switch (re_direction)
+                    {
+                        case "0":
+                        case "1":
+                        case "66":
+                            string owner = reqRd.getProperty("managed_by_id", "");
+                            if (wildItemKeyedName(theadleader, "identity", owner))
+                            {
+                                return;
+                            }
+                            break;
+                    }
+                }
+                if (!String.IsNullOrEmpty(theadstate))
+                {
+                    switch (re_direction)
+                    {
+                        case "0":
+                        case "1":
+                        case "66":
+                            string stateID = reqRd.getProperty("current_state", "");
+                            if (wildItemKeyedName(theadstate, "lcs", stateID))
+                            {
+                                return;
+                            }
+                            break;
+                    }
+                }
+                if (!String.IsNullOrEmpty(theadremark))
+                {
+                    switch (re_direction)
+                    {
+                        case "0":
+                        case "1":
+                            Item wbsAct = Cinn.newItem("WBS Activity2", "get");
+                            wbsAct.setProperty("related_id", reqRd.getID());
+                            wbsAct = wbsAct.apply();
+                            if (wbsAct.getItemCount() > 0)
+                            {
+                                string wbsActID = wbsAct.getProperty("source_id");
+                                string wbs_id = getWbsID(wbsActID);
+                                if (wildItemKeyedName(theadremark, "prj", wbs_id))
+                                {
+                                    return;
+                                }
+                            }
+                            else
+                            {
+                                return;
+                            }
+                            break;
+                        case "66":
+                            return;
+                    }
+                }
+                switch (re_direction)
+                {
+                    case "0":
+                        break;
+                    case "1":
+                        if (remarkBool)
+                        {
+                            reqdoc_relation = reqdoc_relation.apply();
+                            setReqItemXml(reqdoc_relation);
+                            setActItemXml(reqRd);
+                            remarkBool = false;
+                            return;
+                        }
+                        setActItemXml(reqRd);
+                        return;
+                    case "66":
+                        reqdoc_relation = reqdoc_relation.apply();
+                        setReqItemXml(reqdoc_relation);
+                        return;
+                }
+            }
+            else
+            {
+                if (remarkBool)
+                {
+                    reqdoc_relation = reqdoc_relation.apply();
+                    setReqItemXml(reqdoc_relation);
+                    setActItemXml(reqRd);
+                    remarkBool = false;
+                }
+                else
+                {
+                    setActItemXml(reqRd);
+                }
+
+            }
+        }
+
+        /// <summary>
+        /// 搜索列
+        /// </summary>
+        private void GetTrackReportBaseTamplates()
+        {
+            //网格列
+            gridStyle.Append("<inputrow>");
+            gridStyle.Append("  <td bgColor='#BDDEF7' />");
+            gridStyle.Append("  <td bgColor='#BDDEF7' />");
+            gridStyle.Append("  <td bgColor='#BDDEF7' />");
+            gridStyle.Append("  <td bgColor='#BDDEF7' />");
+            gridStyle.Append("  <td bgColor='#BDDEF7' />");
+            gridStyle.Append("  <td bgColor='#BDDEF7' />");
+            gridStyle.Append("  <td bgColor='#BDDEF7' />");
+            gridStyle.Append("</inputrow>");
+        }
+
+        //private void inputRowData(Item data)
+        //{
+        //    inputRow = new List<inputRowClass>();
+        //    inputRow.Add(new inputRowClass
+        //    {
+        //        inputRowName = "1",
+        //        inputRowValue = "2"
+        //    });
+        //}
 
         #endregion
 

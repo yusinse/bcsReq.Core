@@ -30,6 +30,8 @@ namespace bcsReq.Core
         protected CallContext CCO;
         protected StringBuilder gridStyle;
 
+        public static List<string> iconList = new List<string>();
+
         #endregion
 
         #region "                   進入點"
@@ -883,14 +885,14 @@ namespace bcsReq.Core
             {
                 return Cinn.newError("页面无内容导出");
             }
-
-            DataTable dt = HtmlToDataTable(gridXMLS);
+            string rurl = CCOS.Server.MapPath("../Client");
+            DataTable dt = HtmlToDataTable(gridXMLS, rurl);
             string filePath = CCOS.Server.MapPath("../Client/scripts/WebEditor/ueditor/TemporaryFile/") + Cinn.getNewID() + ".xlsx";
 
             return NPOICreateExcel(dt, filePath);
         }
 
-        public static DataTable HtmlToDataTable(string html)
+        public static DataTable HtmlToDataTable(string html, string rurl)
         {
             const string nulltxt = "everything is ok";
             DataTable dt = new DataTable();
@@ -920,6 +922,10 @@ namespace bcsReq.Core
                     //填充数据
                     for (var row = 0; row < rowCount; row++)
                     {
+                        //获取图标目录并存入list
+                        string iconU = rows[row].GetAttributes("icon0").First().Value.Replace(".svg", ".png").Replace("../", "").Replace("/", "\\");
+                        iconList.Add(rurl + "\\" + iconU);
+
                         var tr = rows[row];
                         var cols = tr.ChildNodes.Where(m => m.OriginalName.ToLower() == "td").ToList();
                         for (var column = 0; column < cols.Count; column++)
@@ -995,9 +1001,19 @@ namespace bcsReq.Core
             //向第一行第一列的单元格添加文本
 
             //样式
-            ICellStyle style1 = workBook.CreateCellStyle();
-            style1.FillForegroundColor = 23;
-            style1.FillPattern = FillPattern.SolidForeground;
+            ICellStyle headCellStyle = workBook.CreateCellStyle();
+            headCellStyle.Alignment = HorizontalAlignment.Center;
+            headCellStyle.FillForegroundColor = IndexedColors.Grey40Percent.Index;
+            headCellStyle.FillPattern = FillPattern.SolidForeground;
+
+
+            ICellStyle cellStyle1 = workBook.CreateCellStyle();
+            cellStyle1.Alignment = HorizontalAlignment.Center;
+            cellStyle1.FillForegroundColor = IndexedColors.Yellow.Index;
+            cellStyle1.FillPattern = FillPattern.SolidForeground;
+
+            ICellStyle cellStyle2 = workBook.CreateCellStyle();
+            cellStyle2.Alignment = HorizontalAlignment.Center;
 
             //导入excel标题
             IRow rowHeader = sheet.CreateRow(0);
@@ -1005,11 +1021,19 @@ namespace bcsReq.Core
             {
                 rowHeader = sheet.CreateRow(0);
             }
-            for (int i = 0; i < dt.Columns.Count; i++)
+
+            ICell tcell = rowHeader.CreateCell(0);
+            tcell.CellStyle = headCellStyle;
+            tcell.SetCellValue("图示");
+
+            for (int i = 0; i < dt.Columns.Count + 1; i++)
             {
                 ICell cell = rowHeader.CreateCell(i);
-                cell.SetCellValue(dt.Columns[i].ColumnName);
+                cell.CellStyle = headCellStyle;
+                cell.SetCellValue(dt.Columns[i-1].ColumnName);
             }
+
+            sheet.SetColumnWidth(0, 4 * 256);
 
             //导入excel内容
             for (int i = 0; i < dt.Rows.Count; i++)
@@ -1019,16 +1043,34 @@ namespace bcsReq.Core
                 {
                     row = sheet.CreateRow(i + 1);
                 }
-                for (int j = 0; j < dt.Columns.Count; j++)
+                for (int j = 0; j < dt.Columns.Count + 1; j++)
                 {
+                    if (j == 0)
+                    {
+                        Picture(workBook, sheet, i + 1, iconList[i]);
+                        continue;
+                    }
                     ICell cell = row.GetCell(j);//获取第一列
                     if (cell == null)
                     {
                         cell = row.CreateCell(j);
                     }
-                    cell.SetCellValue(dt.Rows[i][j].ToString());
+                    cell.CellStyle = cellStyle2;
+
+                    if (j == dt.Columns.Count)
+                    {
+                        cell.CellStyle = cellStyle1;
+                    }
+                    cell.SetCellValue(dt.Rows[i][j-1].ToString());
                 }
             }
+            for (int i = 1; i < dt.Columns.Count + 1; i++)
+            {
+                sheet.AutoSizeColumn(i);
+            }
+
+            //清空图标list
+            iconList.Clear();
 
             //输出excel文件
             using (FileStream fs = File.OpenWrite(filePath))
@@ -1048,6 +1090,27 @@ namespace bcsReq.Core
             }
         }
 
+        //excel插入图片
+        public static void Picture(IWorkbook workbook, ISheet sheet, int row, string dPath)
+        {
+            //本地版:无法使用相对路径                               
+            System.Drawing.Image imgOutput = System.Drawing.Bitmap.FromFile(dPath);
+            //设置大小
+            //System.Drawing.Image img = imgOutput.GetThumbnailImage(20, 20, null, IntPtr.Zero);
+            //图片转换为文件流
+            MemoryStream ms = new MemoryStream();
+            imgOutput.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+            BinaryReader br = new BinaryReader(ms);
+            var picBytes = ms.ToArray();
+            ms.Close();
+            int pictureIdx = workbook.AddPicture(picBytes, NPOI.SS.UserModel.PictureType.PNG);  //添加图片
+            XSSFDrawing drawing = (XSSFDrawing)sheet.CreateDrawingPatriarch();
+            XSSFClientAnchor anchor = new XSSFClientAnchor(0, 0, 0, 0, 0, row, 1, row + 1);
+
+            XSSFPicture picture = (XSSFPicture)drawing.CreatePicture(anchor, pictureIdx);
+            //picture.Resize();
+
+        }
         public Item generateXML4Item(Item req)
         {
             if (!CheckLicense())
